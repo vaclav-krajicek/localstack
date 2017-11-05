@@ -149,64 +149,70 @@ def test_lambda_environment():
 
 
 def test_prime_and_destroy_containers():
-    lambda_api.DO_USE_DOCKER = True
-    func_name = 'test_prime_and_destroy_containers'
+    use_docker_before = lambda_api.DO_USE_DOCKER
 
-    # create a new lambda
-    lambda_client = aws_stack.connect_to_service('lambda')
+    try:
+        lambda_api.DO_USE_DOCKER = True
+        func_name = 'test_prime_and_destroy_containers'
 
-    func_arn = lambda_api.func_arn(func_name)
+        # create a new lambda
+        lambda_client = aws_stack.connect_to_service('lambda')
 
-    # make sure existing containers are gone
-    lambda_api.destroy_existing_docker_containers()
-    assert len(lambda_api.get_all_container_names()) == 0
+        func_arn = lambda_api.func_arn(func_name)
 
-    # deploy and invoke lambda without Docker
-    zip_file = testutil.create_lambda_archive(load_file(TEST_LAMBDA_ENV), get_content=True,
-                                              libs=TEST_LAMBDA_LIBS, runtime=LAMBDA_RUNTIME_PYTHON27)
-    testutil.create_lambda_function(func_name=func_name,
-                                    zip_file=zip_file, runtime=LAMBDA_RUNTIME_PYTHON27, envvars={'Hello': 'World'})
+        # make sure existing containers are gone
+        lambda_api.destroy_existing_docker_containers()
+        assert len(lambda_api.get_all_container_names()) == 0
 
-    assert len(lambda_api.get_all_container_names()) == 0
+        # deploy and invoke lambda without Docker
+        zip_file = testutil.create_lambda_archive(load_file(TEST_LAMBDA_ENV), get_content=True,
+                                                  libs=TEST_LAMBDA_LIBS, runtime=LAMBDA_RUNTIME_PYTHON27)
+        testutil.create_lambda_function(func_name=func_name, zip_file=zip_file,
+                                        runtime=LAMBDA_RUNTIME_PYTHON27, envvars={'Hello': 'World'})
 
-    assert lambda_api.function_invoke_times == {}
+        assert len(lambda_api.get_all_container_names()) == 0
 
-    # invoke a few times.
-    durations = []
+        assert lambda_api.function_invoke_times == {}
 
-    for i in range(0, 4):
-        prev_invoke_time = None
-        if i > 0:
-            prev_invoke_time = lambda_api.function_invoke_times[func_arn]
+        # invoke a few times.
+        durations = []
+        num_iterations = 3
 
-        start_time = time.time()
-        lambda_client.invoke(FunctionName=func_name, Payload=b'{}')
-        duration = time.time() - start_time
+        for i in range(0, num_iterations + 1):
+            prev_invoke_time = None
+            if i > 0:
+                prev_invoke_time = lambda_api.function_invoke_times[func_arn]
 
-        assert len(lambda_api.get_all_container_names()) == 1
+            start_time = time.time()
+            lambda_client.invoke(FunctionName=func_name, Payload=b'{}')
+            duration = time.time() - start_time
 
-        # ensure the last invoke time is being updated properly.
-        if i > 0:
-            assert lambda_api.function_invoke_times[func_arn] > prev_invoke_time
-        else:
-            assert lambda_api.function_invoke_times[func_arn] > 0
+            assert len(lambda_api.get_all_container_names()) == 1
 
-        print('Invoke Duration%d: %f' % (i, duration))
-        durations.append(duration)
+            # ensure the last invoke time is being updated properly.
+            if i > 0:
+                assert lambda_api.function_invoke_times[func_arn] > prev_invoke_time
+            else:
+                assert lambda_api.function_invoke_times[func_arn] > 0
 
-    # the first call would have created the container. subsequent calls would reuse and be faster.
-    assert durations[1] < durations[0]
-    assert durations[2] < durations[0]
-    assert durations[3] < durations[0]
+            print('Invoke Duration%d: %f' % (i, duration))
+            durations.append(duration)
 
-    status = lambda_api.get_docker_container_status(func_arn)
-    assert status == 1
+        # the first call would have created the container. subsequent calls would reuse and be faster.
+        for i in range(1, num_iterations + 1):
+            assert durations[i] < durations[0]
 
-    lambda_api.destroy_existing_docker_containers()
-    status = lambda_api.get_docker_container_status(func_arn)
-    assert status == 0
+        status = lambda_api.get_docker_container_status(func_arn)
+        assert status == 1
 
-    assert len(lambda_api.get_all_container_names()) == 0
+        lambda_api.destroy_existing_docker_containers()
+        status = lambda_api.get_docker_container_status(func_arn)
+        assert status == 0
+
+        assert len(lambda_api.get_all_container_names()) == 0
+
+    finally:
+        lambda_api.DO_USE_DOCKER = use_docker_before
 
 
 def test_destroy_idle_containers():

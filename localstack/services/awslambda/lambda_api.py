@@ -302,7 +302,10 @@ def run_lambda(func, event, context, func_arn, suppress_output=False, async=Fals
             environment['AWS_LAMBDA_EVENT_BODY'] = event_body_escaped
             environment['HOSTNAME'] = docker_host
             environment['LOCALSTACK_HOSTNAME'] = docker_host
-            exec_env_vars = ' '.join(['export {}={} &&'.format(k, cmd_quote(v)) for (k, v) in environment.items()])
+            # Note: currently "docker exec" does not support --env-file, i.e., environment variables can only be
+            # passed directly on the command line, using "-e" below. TODO: Update this code once --env-file is
+            # available for docker exec, to better support very large Lambda events (very long environment values)
+            exec_env_vars = ' '.join(['-e {}=${}'.format(k, k) for (k, v) in environment.items()])
 
             run_cmd = ''
 
@@ -333,8 +336,7 @@ def run_lambda(func, event, context, func_arn, suppress_output=False, async=Fals
                 class_path = run_result.strip().replace('\n', ':')
 
                 # create the command
-                run_cmd = '%s cd %s && java -cp .:%s "%s" "%s" "%s"' % (
-                    exec_env_vars,
+                run_cmd = 'cd %s && java -cp .:%s "%s" "%s" "%s"' % (
                     taskdir,
                     class_path,
                     LAMBDA_EXECUTOR_CLASS,
@@ -342,25 +344,25 @@ def run_lambda(func, event, context, func_arn, suppress_output=False, async=Fals
                     event_file
                 )
             else:
-                run_cmd = '%s %s %s' % (exec_env_vars, container_info.entry_point, handler_args)
+                run_cmd = '%s %s' % (container_info.entry_point, handler_args)
 
             cmd = (
                 'docker exec'
+                ' %s'  # env variables
                 ' %s'  # container name
                 ' /bin/bash -c'
                 ' \''
                 ' %s'  # run cmd
                 '\''
-            ) % (container_info.name, run_cmd)
+            ) % (exec_env_vars, container_info.name, run_cmd)
 
-            env_vars = {}
             print(cmd)
 
             function_invoke_times[func_arn] = time.time()
 
             # lambci writes the Lambda result to stdout and logs to stderr, fetch it from there!
             LOG.debug('Running lambda cmd: %s', cmd)
-            result, log_output = run_lambda_executor(cmd, env_vars, async)
+            result, log_output = run_lambda_executor(cmd, environment, async)
             LOG.debug('Lambda log output:\n%s' % log_output)
         else:
             # execute the Lambda function in a forked sub-process, sync result via queue
